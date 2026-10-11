@@ -1,0 +1,4 @@
+# Dataset and model settings for local experiments.
+data_path: data/processed/records.csv
+target: target
+model_path: artifacts/model.joblib
