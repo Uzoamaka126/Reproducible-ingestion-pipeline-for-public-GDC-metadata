@@ -1,0 +1,30 @@
+[gdc]
+base_url = "https://api.gdc.cancer.gov"
+endpoint = "files"
+format = "JSON"
+page_size = 1000
+
+# This is a required access restriction. The query builder always combines it
+# with any additional filters, so config cannot broaden results to controlled data.
+access_field = "files.access"
+access_value = "open"
+
+# Add optional GDC filter clauses here. They are combined with the required
+# open-access clause using `and`. Example:
+# filters = '{"op":"=","content":{"field":"files.data_type","value":"Gene Expression Quantification"}}'
+
+# Fields returned by the `/files` endpoint and retained in cleaned output.
+fields = [
+  "file_id",
+  "file_name",
+  "access",
+  "data_category",
+  "data_type",
+  "data_format",
+  "file_size",
+  "md5sum",
+  "state",
+  "updated_datetime",
+  "cases.case_id",
+  "cases.project.project_id",
+]
