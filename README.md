@@ -25,3 +25,9 @@
 
 The request builder and schema are in `gdc_ingest/query.py` and
 `gdc_ingest/schema.py`. Configuration defaults are in `config.toml`.
+
+`config.toml` also defines separate paths for raw responses, cleaned records,
+rejected records, and run manifests. Retry settings specify the total attempts,
+initial retry delay, exponential growth multiplier, and maximum delay. Optional
+GDC filters are supplied as a JSON string in `gdc.additional_filter_json`; the
+required open-access filter remains enforced by the request builder.

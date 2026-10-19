@@ -9,9 +9,10 @@ page_size = 1000
 access_field = "files.access"
 access_value = "open"
 
-# Add optional GDC filter clauses here. They are combined with the required
-# open-access clause using `and`. Example:
-# filters = '{"op":"=","content":{"field":"files.data_type","value":"Gene Expression Quantification"}}'
+# Optional GDC filter expression as a JSON string. Leave empty to include all
+# open-access files. The application must AND this expression with the
+# required open-access clause above.
+additional_filter_json = ""
 
 # Fields returned by the `/files` endpoint and retained in cleaned output.
 fields = [
@@ -28,3 +29,21 @@ fields = [
   "cases.case_id",
   "cases.project.project_id",
 ]
+
+[output]
+# Paths are relative to the project root unless absolute paths are provided.
+# Keep source responses, validated records, rejected records, and run manifests
+# in separate locations.
+raw_dir = "data/raw"
+cleaned_dir = "data/cleaned"
+rejected_dir = "data/rejected"
+run_manifest_dir = "data/manifests"
+
+[retry]
+# Total attempts per request, including the initial attempt.
+max_attempts = 5
+# Delay before the first retry. Later waits grow exponentially:
+# base_delay_seconds * backoff_multiplier ** (failed_attempt - 1).
+base_delay_seconds = 1.0
+backoff_multiplier = 2.0
+max_delay_seconds = 60.0
