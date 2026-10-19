@@ -31,3 +31,11 @@ rejected records, and run manifests. Retry settings specify the total attempts,
 initial retry delay, exponential growth multiplier, and maximum delay. Optional
 GDC filters are supplied as a JSON string in `gdc.additional_filter_json`; the
 required open-access filter remains enforced by the request builder.
+
+## Fetch raw pages
+
+Run `python -m gdc_ingest` from the project root, or pass another settings file
+with `python -m gdc_ingest --config path/to/config.toml`. Each successful page
+is saved as its original JSON response under a unique timestamped directory in
+`data/raw`. Failed requests are retried according to the configured capped
+exponential backoff; the command exits with an error after the attempt limit.
