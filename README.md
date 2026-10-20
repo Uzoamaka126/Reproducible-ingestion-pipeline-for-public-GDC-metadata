@@ -17,8 +17,8 @@
   metadata are optional because GDC metadata is not uniformly populated.
 - **Raw and cleaned data:** retain the complete response payload separately;
   cleaned records contain only the declared schema fields. Invalid records and
-  records without explicit open-access status should be routed to quarantine
-  when the ingestion writer is implemented.
+  records without explicit open-access status are written to a separate
+  rejected-records JSONL file with their source offset and validation errors.
 - **API version:** query `https://api.gdc.cancer.gov/status` and record the
   returned version with the run metadata. The `/status` endpoint provides API
   status and version information.
@@ -37,5 +37,7 @@ required open-access filter remains enforced by the request builder.
 Run `python -m gdc_ingest` from the project root, or pass another settings file
 with `python -m gdc_ingest --config path/to/config.toml`. Each successful page
 is saved as its original JSON response under a unique timestamped directory in
-`data/raw`. Failed requests are retried according to the configured capped
-exponential backoff; the command exits with an error after the attempt limit.
+`data/raw`. Validated records are written to a separate JSONL file under
+`data/cleaned`, and invalid records are written under `data/rejected`. Failed
+requests are retried according to the configured capped exponential backoff;
+the command exits with an error after the attempt limit.

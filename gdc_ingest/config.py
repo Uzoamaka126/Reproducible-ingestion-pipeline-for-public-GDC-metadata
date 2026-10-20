@@ -15,6 +15,8 @@ class PipelineConfig:
     fields: list[str]
     additional_filter: dict[str, Any] | None
     raw_dir: Path
+    cleaned_dir: Path
+    rejected_dir: Path
     max_attempts: int
     base_delay_seconds: float
     backoff_multiplier: float
@@ -53,16 +55,19 @@ def load_config(path: Path) -> PipelineConfig:
         raise ValueError("additional_filter_json must decode to a JSON object")
 
     config_root = path.resolve().parent
-    raw_dir = Path(output["raw_dir"])
-    if not raw_dir.is_absolute():
-        raw_dir = config_root / raw_dir
+
+    def resolve_output_path(key: str) -> Path:
+        output_path = Path(output[key])
+        return output_path if output_path.is_absolute() else config_root / output_path
 
     return PipelineConfig(
         endpoint_url=f"{base_url}/{endpoint}",
         page_size=page_size,
         fields=list(gdc["fields"]),
         additional_filter=additional_filter,
-        raw_dir=raw_dir,
+        raw_dir=resolve_output_path("raw_dir"),
+        cleaned_dir=resolve_output_path("cleaned_dir"),
+        rejected_dir=resolve_output_path("rejected_dir"),
         max_attempts=max_attempts,
         base_delay_seconds=base_delay,
         backoff_multiplier=multiplier,

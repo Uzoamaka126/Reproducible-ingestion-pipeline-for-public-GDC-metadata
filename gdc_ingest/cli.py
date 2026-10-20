@@ -11,8 +11,11 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from pydantic import ValidationError
+
 from .config import PipelineConfig, load_config
 from .query import build_files_request
+from .schema import GdcFileRecord
 
 
 class PageFetchError(RuntimeError):
@@ -93,14 +96,22 @@ def _fetch_with_retries(
 
 
 def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
-    """Fetch every page, saving each successful response as an immutable file."""
+    """Fetch all pages and write raw, validated, and rejected records separately."""
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     run_dir = config.raw_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    cleaned_run_dir = config.cleaned_dir / run_id
+    rejected_run_dir = config.rejected_dir / run_id
+    cleaned_run_dir.mkdir(parents=True, exist_ok=False)
+    rejected_run_dir.mkdir(parents=True, exist_ok=False)
+    cleaned_path = cleaned_run_dir / "records.jsonl"
+    rejected_path = rejected_run_dir / "records.jsonl"
 
     offset = 0
     page_count = 0
     total: int | None = None
+    valid_count = 0
+    rejected_count = 0
     while total is None or offset < total:
         body, parsed = _fetch_with_retries(config, offset, logger)
         hits = parsed["data"]["hits"]
@@ -118,6 +129,39 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
             total=total,
         )
 
+        with cleaned_path.open("a", encoding="utf-8") as cleaned_file, rejected_path.open(
+            "a", encoding="utf-8"
+        ) as rejected_file:
+            for record_index, hit in enumerate(hits):
+                try:
+                    if not isinstance(hit, dict):
+                        raise ValueError("record must be a JSON object")
+                    validated = GdcFileRecord.model_validate(hit)
+                    cleaned_file.write(
+                        json.dumps(validated.model_dump(mode="json"), sort_keys=True) + "\n"
+                    )
+                    valid_count += 1
+                except (ValidationError, ValueError) as error:
+                    rejection = {
+                        "offset": offset,
+                        "record_index": record_index,
+                        "record": hit,
+                        "errors": (
+                            error.errors(include_url=False, include_context=False)
+                            if isinstance(error, ValidationError)
+                            else [{"message": str(error)}]
+                        ),
+                    }
+                    rejected_file.write(json.dumps(rejection, sort_keys=True) + "\n")
+                    rejected_count += 1
+                    _log_event(
+                        logger,
+                        "record_rejected",
+                        offset=offset,
+                        record_index=record_index,
+                        error_count=len(rejection["errors"]),
+                    )
+
         if not hits:
             if offset < total:
                 raise RuntimeError(
@@ -131,7 +175,11 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
         "fetch_complete",
         pages=page_count,
         total_records=total or 0,
+        valid_records=valid_count,
+        rejected_records=rejected_count,
         raw_dir=str(run_dir),
+        cleaned_path=str(cleaned_path),
+        rejected_path=str(rejected_path),
     )
     return page_count
 
