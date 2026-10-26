@@ -107,12 +107,20 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     cleaned_path = cleaned_run_dir / "records.jsonl"
     rejected_path = rejected_run_dir / "records.jsonl"
 
+    seen_file_ids = set()
+    for existing_path in config.cleaned_dir.rglob("records.jsonl"):
+        if existing_path == cleaned_path:
+            continue
+        with existing_path.open(encoding="utf-8") as existing_file:
+            for line in existing_file:
+                if line.strip():
+                    seen_file_ids.add(json.loads(line)["file_id"])
+
     offset = 0
     page_count = 0
     total: int | None = None
     valid_count = 0
     rejected_count = 0
-    records_by_file_id = {}
 
     while total is None or offset < total:
         body, parsed = _fetch_with_retries(config, offset, logger)
@@ -122,6 +130,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
         page_path = run_dir / f"page_{offset:012d}.json"
         page_path.write_bytes(body)
         page_count += 1
+        duplicate_count = 0
+
         _log_event(
             logger,
             "raw_page_saved",
@@ -141,12 +151,14 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
                     validated = GdcFileRecord.model_validate(hit)
                     file_id = validated.file_id
 
-                    if records_by_file_id[file_id] is None:
-                        records_by_file_id[file_id] = validated
-                        
+                    if file_id in seen_file_ids:
+                        duplicate_count += 1
+                        continue
+
                     cleaned_file.write(
                         json.dumps(validated.model_dump(mode="json"), sort_keys=True) + "\n"
                     )
+                    seen_file_ids.add(file_id)
                     valid_count += 1
                 except (ValidationError, ValueError) as error:
                     rejection = {
@@ -181,6 +193,7 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
         logger,
         "fetch_complete",
         pages=page_count,
+        duplicate_count=duplicate_count,
         total_records=total or 0,
         valid_records=valid_count,
         rejected_records=rejected_count,
