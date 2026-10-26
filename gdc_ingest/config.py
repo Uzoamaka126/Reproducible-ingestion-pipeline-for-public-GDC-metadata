@@ -22,15 +22,27 @@ class PipelineConfig:
     backoff_multiplier: float
     max_delay_seconds: float
 
-
-def load_config(path: Path) -> PipelineConfig:
-    """Read TOML settings, resolving output paths beside the config file."""
-    with path.open("rb") as config_file:
-        raw = tomllib.load(config_file)
+def read_gdc_output_retry_sections(raw: dict[str, Any]) -> dict[str, Any]:
+    required_sections = ("gdc", "output", "retry")
+    missing_sections = [section for section in required_sections if section not in raw]
+    if missing_sections:
+        raise ValueError(f"Missing required configuration sections: {', '.join(missing_sections)}")
 
     gdc = raw["gdc"]
     output = raw["output"]
     retry = raw["retry"]
+
+    if gdc is None or output is None or retry is None:
+        raise ValueError("Missing values")
+
+    result = {}
+    result["gdc"] = gdc
+    result["output"] = output
+    result["retry"] = retry
+
+    return result
+
+def validateGDCURL(gdc: Any) -> dict[str, Any]:
     base_url = str(gdc["base_url"]).rstrip("/")
     endpoint = str(gdc["endpoint"]).strip("/")
     parsed_url = urlparse(base_url)
@@ -38,6 +50,27 @@ def load_config(path: Path) -> PipelineConfig:
         raise ValueError("GDC base_url must use https://api.gdc.cancer.gov")
     if endpoint != "files":
         raise ValueError("this CLI only supports the public GDC files endpoint")
+
+    result = {}
+    result["base_url"] = base_url
+    result["endpoint"] = endpoint
+
+    return result
+
+
+def load_config(path: Path) -> PipelineConfig:
+    """Read TOML settings, resolving output paths beside the config file."""
+    with path.open("rb") as config_file:
+        raw = tomllib.load(config_file)
+
+    read_result = read_gdc_output_retry_sections(raw)
+    gdc = read_result["gdc"]
+    retry = read_result["retry"]
+    output = read_result["output"]
+
+    validated_url = validateGDCURL(gdc)
+    base_url = validated_url["base_url"]
+    endpoint = validated_url["endpoint"]
 
     page_size = int(gdc["page_size"])
     max_attempts = int(retry["max_attempts"])
@@ -60,14 +93,28 @@ def load_config(path: Path) -> PipelineConfig:
         output_path = Path(output[key])
         return output_path if output_path.is_absolute() else config_root / output_path
 
+    output_paths = {
+        key: resolve_output_path(key).resolve()
+        for key in ("raw_dir", "cleaned_dir", "rejected_dir")
+    }
+    for name, output_path in output_paths.items():
+        for other_name, other_path in output_paths.items():
+            if name == other_name:
+                continue
+            if output_path == other_path or output_path in other_path.parents:
+                raise ValueError(
+                    f"output paths for {name} and {other_name} must be separate "
+                    "and cannot contain one another"
+                )
+
     return PipelineConfig(
         endpoint_url=f"{base_url}/{endpoint}",
         page_size=page_size,
         fields=list(gdc["fields"]),
         additional_filter=additional_filter,
-        raw_dir=resolve_output_path("raw_dir"),
-        cleaned_dir=resolve_output_path("cleaned_dir"),
-        rejected_dir=resolve_output_path("rejected_dir"),
+        raw_dir=output_paths["raw_dir"],
+        cleaned_dir=output_paths["cleaned_dir"],
+        rejected_dir=output_paths["rejected_dir"],
         max_attempts=max_attempts,
         base_delay_seconds=base_delay,
         backoff_multiplier=multiplier,

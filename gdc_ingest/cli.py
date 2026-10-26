@@ -112,6 +112,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     total: int | None = None
     valid_count = 0
     rejected_count = 0
+    records_by_file_id = {}
+
     while total is None or offset < total:
         body, parsed = _fetch_with_retries(config, offset, logger)
         hits = parsed["data"]["hits"]
@@ -137,6 +139,11 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
                     if not isinstance(hit, dict):
                         raise ValueError("record must be a JSON object")
                     validated = GdcFileRecord.model_validate(hit)
+                    file_id = validated.file_id
+
+                    if records_by_file_id[file_id] is None:
+                        records_by_file_id[file_id] = validated
+                        
                     cleaned_file.write(
                         json.dumps(validated.model_dump(mode="json"), sort_keys=True) + "\n"
                     )
