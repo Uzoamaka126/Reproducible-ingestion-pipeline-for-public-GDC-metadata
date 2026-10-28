@@ -12,7 +12,7 @@
   Returned records are checked again locally and only records whose `access`
   value is exactly `open` can pass the cleaned record schema.
 - **Record identity and schema:** `file_id` is the stable record identifier.
-  `gdc_ingest.schema.GdcFileRecord` defines the cleaned fields; file name,
+  `src.schema.GdcFileRecord` defines the cleaned fields; file name,
   category, type, format, size, checksum, state, update time, and linked case
   metadata are optional because GDC metadata is not uniformly populated.
 - **Raw and cleaned data:** retain the complete response payload separately;
@@ -23,8 +23,8 @@
   returned version with the run metadata. The `/status` endpoint provides API
   status and version information.
 
-The request builder and schema are in `gdc_ingest/query.py` and
-`gdc_ingest/schema.py`. Configuration defaults are in `config.toml`.
+The request builder and schema are in `src/query.py` and
+`src/schema.py`. Configuration defaults are in `config.toml`.
 
 `config.toml` also defines separate paths for raw responses, cleaned records,
 rejected records, and run manifests. Retry settings specify the total attempts,
@@ -34,8 +34,8 @@ required open-access filter remains enforced by the request builder.
 
 ## Fetch raw pages
 
-Run `python -m gdc_ingest` from the project root, or pass another settings file
-with `python -m gdc_ingest --config path/to/config.toml`. Each successful page
+Run `python -m src` from the project root, or pass another settings file
+with `python -m src --config path/to/config.toml`. Each successful page
 is saved as its original JSON response under a unique timestamped directory in
 `data/raw`. Validated records are written to a separate JSONL file under
 `data/cleaned`, and invalid records are written under `data/rejected`. Failed
