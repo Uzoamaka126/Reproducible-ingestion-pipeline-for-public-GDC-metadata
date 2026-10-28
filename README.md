@@ -40,4 +40,8 @@ is saved as its original JSON response under a unique timestamped directory in
 `data/raw`. Validated records are written to a separate JSONL file under
 `data/cleaned`, and invalid records are written under `data/rejected`. Failed
 requests are retried according to the configured capped exponential backoff;
-the command exits with an error after the attempt limit.
+the command exits with an error after the attempt limit. On completion, a
+manifest is written under `data/manifests` with the UTC run timestamps,
+effective query and pagination, GDC API version and commit, fetched/valid/
+cleaned/rejected/duplicate counts, and SHA-256 checksums for each raw page and
+the cleaned and rejected JSONL outputs.

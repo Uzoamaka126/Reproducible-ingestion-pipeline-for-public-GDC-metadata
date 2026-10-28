@@ -11,12 +11,14 @@ from urllib.parse import urlparse
 @dataclass(frozen=True)
 class PipelineConfig:
     endpoint_url: str
+    status_url: str
     page_size: int
     fields: list[str]
     additional_filter: dict[str, Any] | None
     raw_dir: Path
     cleaned_dir: Path
     rejected_dir: Path
+    manifest_dir: Path
     max_attempts: int
     base_delay_seconds: float
     backoff_multiplier: float
@@ -95,7 +97,7 @@ def load_config(path: Path) -> PipelineConfig:
 
     output_paths = {
         key: resolve_output_path(key).resolve()
-        for key in ("raw_dir", "cleaned_dir", "rejected_dir")
+        for key in ("raw_dir", "cleaned_dir", "rejected_dir", "run_manifest_dir")
     }
     for name, output_path in output_paths.items():
         for other_name, other_path in output_paths.items():
@@ -109,12 +111,14 @@ def load_config(path: Path) -> PipelineConfig:
 
     return PipelineConfig(
         endpoint_url=f"{base_url}/{endpoint}",
+        status_url=f"{base_url}/status",
         page_size=page_size,
         fields=list(gdc["fields"]),
         additional_filter=additional_filter,
         raw_dir=output_paths["raw_dir"],
         cleaned_dir=output_paths["cleaned_dir"],
         rejected_dir=output_paths["rejected_dir"],
+        manifest_dir=output_paths["run_manifest_dir"],
         max_attempts=max_attempts,
         base_delay_seconds=base_delay,
         backoff_multiplier=multiplier,

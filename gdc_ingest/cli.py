@@ -2,6 +2,7 @@
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -56,6 +57,53 @@ def _request_page(config: PipelineConfig, offset: int) -> tuple[bytes, dict[str,
     return body, parsed
 
 
+def _request_api_status(config: PipelineConfig) -> dict[str, Any]:
+    request = Request(config.status_url, headers={"Accept": "application/json"})
+    with urlopen(request, timeout=60) as response:
+        status = json.loads(response.read())
+    if not isinstance(status, dict):
+        raise ValueError("GDC status response must be a JSON object")
+    if not status.get("tag") and not status.get("version"):
+        raise ValueError("GDC status response has no API version")
+    return status
+
+
+def _fetch_api_status(config: PipelineConfig, logger: logging.Logger) -> dict[str, Any]:
+    for attempt in range(1, config.max_attempts + 1):
+        try:
+            status = _request_api_status(config)
+            api_version = status.get("tag") or status.get("version")
+            _log_event(logger, "api_status_fetched", api_version=api_version)
+            return status
+        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
+            if attempt >= config.max_attempts:
+                raise PageFetchError(
+                    f"failed to fetch GDC API status after {attempt} attempts: {error}"
+                ) from error
+            delay = min(
+                config.base_delay_seconds * config.backoff_multiplier ** (attempt - 1),
+                config.max_delay_seconds,
+            )
+            _log_event(
+                logger,
+                "api_status_retry",
+                attempt=attempt,
+                next_attempt=attempt + 1,
+                delay_seconds=delay,
+                error=str(error),
+            )
+            time.sleep(delay)
+    raise AssertionError("status retry loop exited unexpectedly")
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as output_file:
+        for chunk in iter(lambda: output_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _fetch_with_retries(
     config: PipelineConfig,
     offset: int,
@@ -97,7 +145,9 @@ def _fetch_with_retries(
 
 def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     """Fetch all pages and write raw, validated, and rejected records separately."""
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    started_at = datetime.now(timezone.utc)
+    run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+    api_status = _fetch_api_status(config, logger)
     run_dir = config.raw_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     cleaned_run_dir = config.cleaned_dir / run_id
@@ -106,6 +156,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     rejected_run_dir.mkdir(parents=True, exist_ok=False)
     cleaned_path = cleaned_run_dir / "records.jsonl"
     rejected_path = rejected_run_dir / "records.jsonl"
+    cleaned_path.touch(exist_ok=False)
+    rejected_path.touch(exist_ok=False)
 
     seen_file_ids = set()
     for existing_path in config.cleaned_dir.rglob("records.jsonl"):
@@ -120,7 +172,11 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     page_count = 0
     total: int | None = None
     valid_count = 0
+    cleaned_count = 0
     rejected_count = 0
+    duplicate_count = 0
+    records_fetched = 0
+    raw_checksums: dict[str, str] = {}
 
     while total is None or offset < total:
         body, parsed = _fetch_with_retries(config, offset, logger)
@@ -129,8 +185,10 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
         total = int(pagination["total"])
         page_path = run_dir / f"page_{offset:012d}.json"
         page_path.write_bytes(body)
+        raw_checksums[page_path.name] = hashlib.sha256(body).hexdigest()
         page_count += 1
-        duplicate_count = 0
+        page_duplicate_count = 0
+        records_fetched += len(hits)
 
         _log_event(
             logger,
@@ -149,17 +207,19 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
                     if not isinstance(hit, dict):
                         raise ValueError("record must be a JSON object")
                     validated = GdcFileRecord.model_validate(hit)
+                    valid_count += 1
                     file_id = validated.file_id
 
                     if file_id in seen_file_ids:
                         duplicate_count += 1
+                        page_duplicate_count += 1
                         continue
 
                     cleaned_file.write(
                         json.dumps(validated.model_dump(mode="json"), sort_keys=True) + "\n"
                     )
                     seen_file_ids.add(file_id)
-                    valid_count += 1
+                    cleaned_count += 1
                 except (ValidationError, ValueError) as error:
                     rejection = {
                         "offset": offset,
@@ -181,6 +241,14 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
                         error_count=len(rejection["errors"]),
                     )
 
+        if page_duplicate_count:
+            _log_event(
+                logger,
+                "duplicate_records_skipped",
+                offset=offset,
+                count=page_duplicate_count,
+            )
+
         if not hits:
             if offset < total:
                 raise RuntimeError(
@@ -189,10 +257,57 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
             break
         offset += len(hits)
 
+    finished_at = datetime.now(timezone.utc)
+    manifest_path = config.manifest_dir / f"{run_id}.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "run_id": run_id,
+        "timestamp": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "query": build_files_request(
+            page_size=config.page_size,
+            offset=0,
+            fields=config.fields,
+            additional_filter=config.additional_filter,
+        ),
+        "pagination": {
+            "offset_parameter": "from",
+            "page_size": config.page_size,
+            "pages_fetched": page_count,
+        },
+        "api": {
+            "files_url": config.endpoint_url,
+            "status_url": config.status_url,
+            "version": api_status.get("tag") or api_status.get("version"),
+            "version_number": api_status.get("version"),
+            "commit": api_status.get("commit"),
+            "status": api_status.get("status"),
+        },
+        "record_counts": {
+            "total_from_api": total or 0,
+            "fetched": records_fetched,
+            "valid": valid_count,
+            "written_to_cleaned": cleaned_count,
+            "rejected": rejected_count,
+            "duplicates_skipped": duplicate_count,
+        },
+        "outputs": {
+            "raw_pages_directory": str(run_dir),
+            "raw_pages_sha256": raw_checksums,
+            "cleaned_records": str(cleaned_path),
+            "cleaned_records_sha256": _sha256(cleaned_path),
+            "rejected_records": str(rejected_path),
+            "rejected_records_sha256": _sha256(rejected_path),
+        },
+    }
+    with manifest_path.open("x", encoding="utf-8") as manifest_file:
+        manifest_file.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     _log_event(
         logger,
         "fetch_complete",
         pages=page_count,
+        records_fetched=records_fetched,
+        records_written=cleaned_count,
         duplicate_count=duplicate_count,
         total_records=total or 0,
         valid_records=valid_count,
@@ -200,6 +315,7 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
         raw_dir=str(run_dir),
         cleaned_path=str(cleaned_path),
         rejected_path=str(rejected_path),
+        manifest_path=str(manifest_path),
     )
     return page_count
 
