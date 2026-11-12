@@ -68,12 +68,18 @@ def _request_api_status(config: PipelineConfig) -> dict[str, Any]:
     return status
 
 
-def _fetch_api_status(config: PipelineConfig, logger: logging.Logger) -> dict[str, Any]:
+def _fetch_api_status(config: PipelineConfig, logger: logging.Logger, run_id: str) -> dict[str, Any]:
     for attempt in range(1, config.max_attempts + 1):
         try:
             status = _request_api_status(config)
             api_version = status.get("tag") or status.get("version")
-            _log_event(logger, "api_status_fetched", api_version=api_version)
+            _log_event(
+                logger,
+                "api_status_fetched",
+                api_version=api_version,
+                timestamp = datetime.now(timezone.utc).isoformat(),
+                run_id=run_id
+            )
             return status
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
             if attempt >= config.max_attempts:
@@ -90,6 +96,8 @@ def _fetch_api_status(config: PipelineConfig, logger: logging.Logger) -> dict[st
                 attempt=attempt,
                 next_attempt=attempt + 1,
                 delay_seconds=delay,
+                run_id=run_id,
+                timestamp = datetime.now(timezone.utc).isoformat(),
                 error=str(error),
             )
             time.sleep(delay)
@@ -108,11 +116,12 @@ def _fetch_with_retries(
     config: PipelineConfig,
     offset: int,
     logger: logging.Logger,
+    run_id: str
 ) -> tuple[bytes, dict[str, Any]]:
     for attempt in range(1, config.max_attempts + 1):
         try:
             body, parsed = _request_page(config, offset)
-            _log_event(logger, "page_fetched", offset=offset, attempt=attempt)
+            _log_event(logger, "page_fetched", offset=offset, attempt=attempt, timestamp = datetime.now(timezone.utc).isoformat(), run_id=run_id)
             return body, parsed
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as error:
             if attempt >= config.max_attempts:
@@ -121,6 +130,8 @@ def _fetch_with_retries(
                     "page_failed",
                     offset=offset,
                     attempts=attempt,
+                    timestamp = datetime.now(timezone.utc).isoformat(),
+                    run_id=run_id,
                     error=str(error),
                 )
                 raise PageFetchError(
@@ -135,6 +146,8 @@ def _fetch_with_retries(
                 "page_retry",
                 offset=offset,
                 attempt=attempt,
+                timestamp = datetime.now(timezone.utc).isoformat(),
+                run_id=run_id,
                 next_attempt=attempt + 1,
                 delay_seconds=delay,
                 error=str(error),
@@ -147,7 +160,7 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     """Fetch all pages and write raw, validated, and rejected records separately."""
     started_at = datetime.now(timezone.utc)
     run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
-    api_status = _fetch_api_status(config, logger)
+    api_status = _fetch_api_status(config, logger, run_id)
     run_dir = config.raw_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     cleaned_run_dir = config.cleaned_dir / run_id
@@ -179,7 +192,7 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     raw_checksums: dict[str, str] = {}
 
     while total is None or offset < total:
-        body, parsed = _fetch_with_retries(config, offset, logger)
+        body, parsed = _fetch_with_retries(config, offset, logger, run_id)
         hits = parsed["data"]["hits"]
         pagination = parsed["data"]["pagination"]
         total = int(pagination["total"])
@@ -194,6 +207,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
             logger,
             "raw_page_saved",
             path=str(page_path),
+            timestamp = datetime.now(timezone.utc).isoformat(),
+            run_id=run_id,
             offset=offset,
             records=len(hits),
             total=total,
@@ -237,6 +252,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
                         logger,
                         "record_rejected",
                         offset=offset,
+                        timestamp = datetime.now(timezone.utc).isoformat(),
+                        run_id=run_id,
                         record_index=record_index,
                         error_count=len(rejection["errors"]),
                     )
@@ -245,6 +262,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
             _log_event(
                 logger,
                 "duplicate_records_skipped",
+                timestamp = datetime.now(timezone.utc).isoformat(),
+                run_id=run_id,
                 offset=offset,
                 count=page_duplicate_count,
             )
@@ -308,6 +327,8 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
         pages=page_count,
         records_fetched=records_fetched,
         records_written=cleaned_count,
+        timestamp = datetime.now(timezone.utc).isoformat(),
+        run_id=run_id,
         duplicate_count=duplicate_count,
         total_records=total or 0,
         valid_records=valid_count,
@@ -339,7 +360,7 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config(args.config)
         fetch_all_pages(config, logger)
     except (OSError, KeyError, ValueError, PageFetchError, RuntimeError) as error:
-        _log_event(logger, "run_failed", error=str(error))
+        _log_event(logger, "run_failed", error=str(error), timestamp = datetime.now(timezone.utc).isoformat(),)
         return 1
     return 0
 

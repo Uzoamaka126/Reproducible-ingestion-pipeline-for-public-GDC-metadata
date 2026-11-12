@@ -7,7 +7,9 @@ authors = [
     { name = "Uzoamaka Anyanwu" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pydantic==2.11.7",
+]
 
 [project.scripts]
 reproducible-ingestion-pipeline-for-public-gdc-metadata = "reproducible_ingestion_pipeline_for_public_gdc_metadata:main"

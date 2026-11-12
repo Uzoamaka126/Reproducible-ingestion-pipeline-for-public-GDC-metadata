@@ -26,6 +26,40 @@
 The request builder and schema are in `src/query.py` and
 `src/schema.py`. Configuration defaults are in `config.toml`.
 
+## Development setup
+
+Use Python 3.12 and uv 0.13.5. `pyproject.toml` declares direct dependencies;
+the committed `uv.lock` pins the resolved transitive dependencies and package
+artifacts. Do not use `pip install -r requirements.txt` when you need a
+reproducible environment: that file does not install from `uv.lock`.
+
+From the project root, create or update the environment with:
+
+```sh
+uv lock --check
+uv sync --locked --no-install-project
+```
+
+`uv lock --check` verifies that `uv.lock` matches `pyproject.toml`.
+`uv sync --locked` installs exactly the locked dependency graph and refuses to
+rewrite a stale lockfile. `--no-install-project` keeps the environment focused
+on the declared dependencies; run the source tree directly with:
+
+```sh
+uv run --no-sync python -m src --help
+```
+
+Run the mocked API tests with the same synced environment:
+
+```sh
+uv run --no-sync python -m unittest discover -s tests -v
+```
+
+When changing dependencies, edit `pyproject.toml`, run `uv lock` to update
+`uv.lock`, then rerun the setup commands above. Commit both files together.
+GitHub Actions runs these same lock and environment commands on pushes and pull
+requests.
+
 `config.toml` also defines separate paths for raw responses, cleaned records,
 rejected records, and run manifests. Retry settings specify the total attempts,
 initial retry delay, exponential growth multiplier, and maximum delay. Optional
