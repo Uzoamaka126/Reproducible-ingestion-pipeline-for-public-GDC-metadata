@@ -28,10 +28,11 @@ The request builder and schema are in `src/query.py` and
 
 ## Development setup
 
-Use Python 3.12 and uv 0.13.5. `pyproject.toml` declares direct dependencies;
-the committed `uv.lock` pins the resolved transitive dependencies and package
-artifacts. Do not use `pip install -r requirements.txt` when you need a
-reproducible environment: that file does not install from `uv.lock`.
+The project requires Python 3.12 or newer; CI currently uses Python 3.12 and
+pins uv to 0.13.5. `pyproject.toml` declares direct dependencies, and the
+committed `uv.lock` pins the resolved transitive dependencies and package
+artifacts. Do not use `pip install -r requirements.txt` for a reproducible
+environment: that file does not install from `uv.lock`.
 
 From the project root, create or update the environment with:
 
@@ -68,9 +69,14 @@ required open-access filter remains enforced by the request builder.
 
 ## Fetch raw pages
 
-Run `python -m src` from the project root, or pass another settings file
-with `python -m src --config path/to/config.toml`. Optional flags override
-`config.toml` for that invocation only:
+Run the CLI through the synced uv environment from the project root:
+
+```sh
+uv run --no-sync python -m src
+```
+
+Choose another settings file with `uv run --no-sync python -m src --config path/to/config.toml`.
+Optional flags override `config.toml` for that invocation only:
 
 ```sh
 uv run --no-sync python -m src --page-size 500 --max-attempts 3 --output-dir ./out
@@ -78,15 +84,38 @@ uv run --no-sync python -m src --page-size 500 --max-attempts 3 --output-dir ./o
 
 Omitted flags keep their configured values. `--output-dir` puts that run's
 separate outputs in `raw/`, `cleaned/`, `rejected/`, and `manifests/`
-subdirectories beneath the given directory. Each successful page is saved as
-its original JSON response under a unique timestamped directory in the
-configured raw path (`data/raw` by default). Validated records are written to a
-separate JSONL file under the configured cleaned path (`data/cleaned` by
-default), and invalid records under the configured rejected path (`data/rejected`
-by default). Failed
-requests are retried according to the configured capped exponential backoff;
-the command exits with an error after the attempt limit. On completion, a
-manifest is written under `data/manifests` with the UTC run timestamps,
-effective query and pagination, GDC API version and commit, fetched/valid/
-cleaned/rejected/duplicate counts, and SHA-256 checksums for each raw page and
-the cleaned and rejected JSONL outputs.
+subdirectories beneath the given directory.
+
+### Output files
+
+Each successful API page is saved as its original JSON response under a unique
+timestamped directory in the configured raw path (`data/raw` by default).
+Validated records are written to JSON lines under the configured cleaned path
+(`data/cleaned` by default); invalid records and their validation errors go to
+the configured rejected path (`data/rejected` by default).
+
+By default, the manifest goes in the directory configured by
+`run_manifest_dir` (`data/manifests` by default). If `--output-dir ./out` is
+supplied, it goes under `./out/manifests`.
+
+### Retries
+
+Failed requests are retried up to the configured maximum number of attempts,
+including the initial attempt. The delay grows exponentially between attempts
+and is capped at `max_delay_seconds`. If the limit is reached, the CLI exits
+with an error.
+
+### Run manifest
+
+The manifest records UTC start and finish timestamps, the effective query and
+pagination settings, GDC API version and commit, output paths, and SHA-256
+checksums for every raw page and the cleaned and rejected JSON Lines files. Its
+`record_counts` fields mean:
+
+- `total_from_api`: total number of matching files reported by the API.
+- `fetched`: number of records received across all fetched pages.
+- `valid`: records that passed schema validation, including duplicates.
+- `written_to_cleaned`: valid records newly written to cleaned output.
+- `rejected`: records that failed schema validation.
+- `duplicates_skipped`: valid records whose `file_id` was already present in
+  the cleaned output.
