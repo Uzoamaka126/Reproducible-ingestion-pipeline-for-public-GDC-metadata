@@ -1,6 +1,7 @@
 """Command line entry point for fetching raw GDC metadata pages."""
 
 import argparse
+from dataclasses import replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -349,7 +350,53 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("config.toml"),
         help="TOML settings file (default: ./config.toml)",
     )
+    parser.add_argument(
+        "--page-size",
+        type=int,
+        default=None,
+        help="Override the configured number of records per API page",
+    )
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=None,
+        help="Override the configured total attempts per request",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Write run outputs under this directory (raw/, cleaned/, rejected/, manifests/)",
+    )
     return parser
+
+
+def apply_cli_overrides(
+    config: PipelineConfig,
+    *,
+    page_size: int | None = None,
+    max_attempts: int | None = None,
+    output_dir: Path | None = None,
+) -> PipelineConfig:
+    """Return a per-run config with supplied CLI values taking precedence."""
+    updates: dict[str, Any] = {}
+    if page_size is not None:
+        if page_size < 1:
+            raise ValueError("--page-size must be positive")
+        updates["page_size"] = page_size
+    if max_attempts is not None:
+        if max_attempts < 1:
+            raise ValueError("--max-attempts must be positive")
+        updates["max_attempts"] = max_attempts
+    if output_dir is not None:
+        output_root = output_dir.expanduser().resolve()
+        updates.update(
+            raw_dir=output_root / "raw",
+            cleaned_dir=output_root / "cleaned",
+            rejected_dir=output_root / "rejected",
+            manifest_dir=output_root / "manifests",
+        )
+    return replace(config, **updates)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -358,6 +405,12 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         config = load_config(args.config)
+        config = apply_cli_overrides(
+            config,
+            page_size=args.page_size,
+            max_attempts=args.max_attempts,
+            output_dir=args.output_dir,
+        )
         fetch_all_pages(config, logger)
     except (OSError, KeyError, ValueError, PageFetchError, RuntimeError) as error:
         _log_event(logger, "run_failed", error=str(error), timestamp = datetime.now(timezone.utc).isoformat(),)

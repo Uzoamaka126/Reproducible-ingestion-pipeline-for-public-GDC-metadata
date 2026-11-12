@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import URLError
 
-from src.cli import PageFetchError, fetch_all_pages
+from src.cli import PageFetchError, fetch_all_pages, main
 from src.config import PipelineConfig
 
 
@@ -47,6 +47,7 @@ class FetchPipelineTests(unittest.TestCase):
             max_delay_seconds=10.0,
         )
         self.logger = logging.getLogger(f"test.gdc_ingest.{id(self)}")
+        self.logger.propagate = False
         self.logger.addHandler(logging.NullHandler())
 
     def tearDown(self) -> None:
@@ -207,6 +208,57 @@ class FetchPipelineTests(unittest.TestCase):
             manifest["outputs"]["raw_pages_sha256"][raw_page.name],
             hashlib.sha256(raw_page.read_bytes()).hexdigest(),
         )
+
+    def test_cli_flags_override_config_for_one_run(self) -> None:
+        output_root = self.root / "custom-output"
+        with (
+            patch("src.cli.load_config", return_value=self.config),
+            patch("src.cli.fetch_all_pages") as fetch,
+        ):
+            result = main(
+                [
+                    "--page-size",
+                    "500",
+                    "--max-attempts",
+                    "2",
+                    "--output-dir",
+                    str(output_root),
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        run_config = fetch.call_args.args[0]
+        self.assertEqual(run_config.page_size, 500)
+        self.assertEqual(run_config.max_attempts, 2)
+        self.assertEqual(run_config.raw_dir, (output_root / "raw").resolve())
+        self.assertEqual(run_config.cleaned_dir, (output_root / "cleaned").resolve())
+        self.assertEqual(run_config.rejected_dir, (output_root / "rejected").resolve())
+        self.assertEqual(run_config.manifest_dir, (output_root / "manifests").resolve())
+        self.assertEqual(self.config.page_size, 2)
+        self.assertEqual(self.config.max_attempts, 3)
+
+    def test_cli_uses_config_values_when_overrides_are_omitted(self) -> None:
+        with (
+            patch("src.cli.load_config", return_value=self.config),
+            patch("src.cli.fetch_all_pages") as fetch,
+        ):
+            result = main([])
+
+        self.assertEqual(result, 0)
+        run_config = fetch.call_args.args[0]
+        self.assertEqual(run_config.page_size, self.config.page_size)
+        self.assertEqual(run_config.max_attempts, self.config.max_attempts)
+        self.assertEqual(run_config.raw_dir, self.config.raw_dir)
+
+    def test_cli_rejects_nonpositive_overrides_without_fetching(self) -> None:
+        with (
+            patch("src.cli.load_config", return_value=self.config),
+            patch("src.cli.fetch_all_pages") as fetch,
+        ):
+            result = main(["--page-size", "0"])
+
+        self.assertEqual(result, 1)
+        fetch.assert_not_called()
 
 
 if __name__ == "__main__":

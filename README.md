@@ -69,10 +69,21 @@ required open-access filter remains enforced by the request builder.
 ## Fetch raw pages
 
 Run `python -m src` from the project root, or pass another settings file
-with `python -m src --config path/to/config.toml`. Each successful page
-is saved as its original JSON response under a unique timestamped directory in
-`data/raw`. Validated records are written to a separate JSONL file under
-`data/cleaned`, and invalid records are written under `data/rejected`. Failed
+with `python -m src --config path/to/config.toml`. Optional flags override
+`config.toml` for that invocation only:
+
+```sh
+uv run --no-sync python -m src --page-size 500 --max-attempts 3 --output-dir ./out
+```
+
+Omitted flags keep their configured values. `--output-dir` puts that run's
+separate outputs in `raw/`, `cleaned/`, `rejected/`, and `manifests/`
+subdirectories beneath the given directory. Each successful page is saved as
+its original JSON response under a unique timestamped directory in the
+configured raw path (`data/raw` by default). Validated records are written to a
+separate JSONL file under the configured cleaned path (`data/cleaned` by
+default), and invalid records under the configured rejected path (`data/rejected`
+by default). Failed
 requests are retried according to the configured capped exponential backoff;
 the command exits with an error after the attempt limit. On completion, a
 manifest is written under `data/manifests` with the UTC run timestamps,
