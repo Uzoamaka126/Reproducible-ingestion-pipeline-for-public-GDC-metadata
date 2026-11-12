@@ -98,6 +98,28 @@ class FetchPipelineTests(unittest.TestCase):
         cleaned = next(self.config.cleaned_dir.rglob("records.jsonl"))
         self.assertEqual(len(cleaned.read_text().splitlines()), 3)
 
+    def test_record_limit_caps_total_and_final_request_size(self) -> None:
+        requests: list[tuple[int, int]] = []
+
+        def mocked_urlopen(request: object, timeout: int) -> FakeResponse:
+            if request.full_url.endswith("/status"):
+                return self.status_response()
+            body = json.loads(request.data)
+            requests.append((body["from"], body["size"]))
+            hits = [
+                {"file_id": f"file-{i}", "access": "open"}
+                for i in range(body["from"], body["from"] + body["size"])
+            ]
+            return self.page_response(hits, total=100)
+
+        with patch("src.cli.urlopen", side_effect=mocked_urlopen):
+            pages = fetch_all_pages(self.config, self.logger, record_limit=3)
+
+        self.assertEqual(pages, 2)
+        self.assertEqual(requests, [(0, 2), (2, 1)])
+        cleaned = next(self.config.cleaned_dir.rglob("records.jsonl"))
+        self.assertEqual(len(cleaned.read_text().splitlines()), 3)
+
     def test_retries_failed_page_with_growing_delay_and_stops_on_success(self) -> None:
         file_attempts = 0
 
