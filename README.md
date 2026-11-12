@@ -79,8 +79,14 @@ Choose another settings file with `uv run --no-sync python -m src --config path/
 Optional flags override `config.toml` for that invocation only:
 
 ```sh
-uv run --no-sync python -m src --page-size 500 --max-attempts 3 --output-dir ./out
+uv run --no-sync python -m src --page-size 500 --record-limit 1000 --max-attempts 3 --output-dir ./out
 ```
+
+`--page-size` controls how many records each API request asks for. The optional
+`--record-limit` caps the total number of records fetched across the run; for
+example, `--page-size 10 --record-limit 10` fetches at most 10 records in one
+page. Without `--record-limit`, the CLI continues through all pages reported
+by the API. The record limit must be a positive integer.
 
 Omitted flags keep their configured values. `--output-dir` puts that run's
 separate outputs in `raw/`, `cleaned/`, `rejected/`, and `manifests/`

@@ -24,6 +24,44 @@ class PageFetchError(RuntimeError):
     """Raised when a page cannot be fetched after all configured attempts."""
 
 
+def _safe_error_message(error: Exception) -> str:
+    """Extract useful, bounded diagnostics from structured HTTP error bodies."""
+    if not isinstance(error, HTTPError):
+        return " ".join(str(error).split())[:300]
+    detail = ""
+    try:
+        body = error.read(16_384).decode("utf-8", errors="replace")
+        payload = json.loads(body)
+
+        def find_detail(value: Any) -> str:
+            if isinstance(value, dict):
+                # GDC and its gateways use several shapes, including nested
+                # error objects and Elasticsearch-style root_cause entries.
+                for key in ("message", "error_description", "detail", "reason", "error", "root_cause", "caused_by"):
+                    candidate = value.get(key)
+                    found = find_detail(candidate)
+                    if found:
+                        return found
+                return ""
+            if isinstance(value, list):
+                for item in value[:3]:
+                    found = find_detail(item)
+                    if found:
+                        return found
+                return ""
+            if isinstance(value, str):
+                return value.strip()
+            return ""
+
+        detail = find_detail(payload)
+    except (OSError, ValueError, UnicodeError):
+        pass
+    detail = " ".join(detail.split())[:240]
+    if detail.lower() in {"internal server error", "internal error", "server error"}:
+        detail = ""
+    return f"HTTP {error.code}" + (f": {detail}" if detail else "")
+
+
 def _log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
     logger.info(json.dumps({"event": event, **fields}, sort_keys=True))
 
@@ -83,9 +121,10 @@ def _fetch_api_status(config: PipelineConfig, logger: logging.Logger, run_id: st
             )
             return status
         except (HTTPError, URLError, TimeoutError, OSError, ValueError) as error:
+            safe_error = _safe_error_message(error)
             if attempt >= config.max_attempts:
                 raise PageFetchError(
-                    f"failed to fetch GDC API status after {attempt} attempts: {error}"
+                    f"failed to fetch GDC API status after {attempt} attempts: {safe_error}"
                 ) from error
             delay = min(
                 config.base_delay_seconds * config.backoff_multiplier ** (attempt - 1),
@@ -99,7 +138,7 @@ def _fetch_api_status(config: PipelineConfig, logger: logging.Logger, run_id: st
                 delay_seconds=delay,
                 run_id=run_id,
                 timestamp = datetime.now(timezone.utc).isoformat(),
-                error=str(error),
+                error=safe_error,
             )
             time.sleep(delay)
     raise AssertionError("status retry loop exited unexpectedly")
@@ -125,6 +164,7 @@ def _fetch_with_retries(
             _log_event(logger, "page_fetched", offset=offset, attempt=attempt, timestamp = datetime.now(timezone.utc).isoformat(), run_id=run_id)
             return body, parsed
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as error:
+            safe_error = _safe_error_message(error)
             if attempt >= config.max_attempts:
                 _log_event(
                     logger,
@@ -133,10 +173,10 @@ def _fetch_with_retries(
                     attempts=attempt,
                     timestamp = datetime.now(timezone.utc).isoformat(),
                     run_id=run_id,
-                    error=str(error),
+                    error=safe_error,
                 )
                 raise PageFetchError(
-                    f"failed to fetch offset {offset} after {attempt} attempts: {error}"
+                    f"failed to fetch offset {offset} after {attempt} attempts: {safe_error}"
                 ) from error
             delay = min(
                 config.base_delay_seconds * config.backoff_multiplier ** (attempt - 1),
@@ -151,13 +191,15 @@ def _fetch_with_retries(
                 run_id=run_id,
                 next_attempt=attempt + 1,
                 delay_seconds=delay,
-                error=str(error),
+                error=safe_error,
             )
             time.sleep(delay)
     raise AssertionError("retry loop exited unexpectedly")
 
 
-def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
+def fetch_all_pages(
+    config: PipelineConfig, logger: logging.Logger, record_limit: int | None = None
+) -> int:
     """Fetch all pages and write raw, validated, and rejected records separately."""
     started_at = datetime.now(timezone.utc)
     run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
@@ -170,8 +212,6 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     rejected_run_dir.mkdir(parents=True, exist_ok=False)
     cleaned_path = cleaned_run_dir / "records.jsonl"
     rejected_path = rejected_run_dir / "records.jsonl"
-    cleaned_path.touch(exist_ok=False)
-    rejected_path.touch(exist_ok=False)
 
     seen_file_ids = set()
     for existing_path in config.cleaned_dir.rglob("records.jsonl"):
@@ -192,8 +232,18 @@ def fetch_all_pages(config: PipelineConfig, logger: logging.Logger) -> int:
     records_fetched = 0
     raw_checksums: dict[str, str] = {}
 
-    while total is None or offset < total:
-        body, parsed = _fetch_with_retries(config, offset, logger, run_id)
+    while (total is None or offset < total) and (
+        record_limit is None or records_fetched < record_limit
+    ):
+        page_config = config
+        if record_limit is not None:
+            page_config = replace(
+                config, page_size=min(config.page_size, record_limit - records_fetched)
+            )
+        body, parsed = _fetch_with_retries(page_config, offset, logger, run_id)
+        if page_count == 0:
+            cleaned_path.touch(exist_ok=False)
+            rejected_path.touch(exist_ok=False)
         hits = parsed["data"]["hits"]
         pagination = parsed["data"]["pagination"]
         total = int(pagination["total"])
@@ -363,6 +413,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the configured total attempts per request",
     )
     parser.add_argument(
+        "--record-limit",
+        type=int,
+        default=None,
+        help="Stop after fetching this many records in total",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -411,7 +467,9 @@ def main(argv: list[str] | None = None) -> int:
             max_attempts=args.max_attempts,
             output_dir=args.output_dir,
         )
-        fetch_all_pages(config, logger)
+        if args.record_limit is not None and args.record_limit < 1:
+            raise ValueError("--record-limit must be positive")
+        fetch_all_pages(config, logger, record_limit=args.record_limit)
     except (OSError, KeyError, ValueError, PageFetchError, RuntimeError) as error:
         _log_event(logger, "run_failed", error=str(error), timestamp = datetime.now(timezone.utc).isoformat(),)
         return 1

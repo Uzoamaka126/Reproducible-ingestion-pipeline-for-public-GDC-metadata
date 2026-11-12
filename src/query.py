@@ -50,7 +50,7 @@ def build_files_request(
 
     return {
         "filters": {"op": "and", "content": clauses},
-        "fields": fields or DEFAULT_FIELDS.copy(),
+        "fields": ",".join(fields or DEFAULT_FIELDS),
         "format": "JSON",
         "size": page_size,
         "from": offset,
