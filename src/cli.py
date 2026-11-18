@@ -392,12 +392,17 @@ def fetch_all_pages(
     return page_count
 
 
-def build_list_tcga_slides(config: PipelineConfig, logger: logging.Logger, offset: int, record_limit: int | None = None) -> int:
+def build_list_tcga_slides(
+    config: PipelineConfig,
+    logger: logging.Logger,
+    offset: int = 0,
+    record_limit: int | None = None,
+) -> int:
     slide_filter = {
-        "op": "=",
+        "op": "and",
         "content": [
             {"op": "=", "content": {"field": "cases.project.program.name", "value": "TCGA"}},
-            {"op": "and", "content": {"field": "files.data_type", "value": "Slide Image"}},
+            {"op": "=", "content": {"field": "files.data_type", "value": "Slide Image"}},
         ],
     }
     slide_config = replace(
@@ -411,18 +416,33 @@ def build_list_tcga_slides(config: PipelineConfig, logger: logging.Logger, offse
             "cases.project.project_id",
         ]
     )
-    slide_config.page_size = min(config.page_size, record_limit)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    fetched = 0
+    page_offset = offset
 
-    # generating a run_id same as the ingestion pipeline
-    started_at = datetime.now(timezone.utc)
-    run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
-
-    return _fetch_with_retries(
-        slide_config,
-        offset,
-        logger,
-        run_id,
-    )
+    while record_limit is None or fetched < record_limit:
+        page_size = slide_config.page_size
+        if record_limit is not None:
+            page_size = min(page_size, record_limit - fetched)
+        page_config = replace(slide_config, page_size=page_size)
+        _, parsed = _fetch_with_retries(page_config, page_offset, logger, run_id)
+        data = parsed["data"]
+        hits = data["hits"]
+        total = data["pagination"]["total"]
+        for hit in hits:
+            cases = hit.get("cases") or []
+            projects = sorted({
+                case.get("project", {}).get("project_id")
+                for case in cases
+                if isinstance(case, dict) and isinstance(case.get("project"), dict)
+                and case["project"].get("project_id")
+            })
+            print(f"{hit.get('file_name', '(unnamed)')}\t{', '.join(projects)}")
+        fetched += len(hits)
+        page_offset += len(hits)
+        if not hits or page_offset >= total:
+            break
+    return fetched
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -455,6 +475,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Stop after fetching this many records in total",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Start listing at this GDC result offset (used with --list-tcga-slides)",
     )
     parser.add_argument(
         "--output-dir",
@@ -511,12 +537,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.record_limit is not None and args.record_limit < 1:
             raise ValueError("--record-limit must be positive")
+        if args.offset < 0:
+            raise ValueError("--offset cannot be negative")
         if args.list_tcga_slides is True:
-            if args.offset:
-                offset = args.offset
-            else:
-                offset = 0
-            build_list_tcga_slides(config, logger, offset, record_limit=args.record_limit)
+            build_list_tcga_slides(
+                config, logger, args.offset, record_limit=args.record_limit
+            )
             return 0
         fetch_all_pages(config, logger, record_limit=args.record_limit)
     except (OSError, KeyError, ValueError, PageFetchError, RuntimeError) as error:
