@@ -92,6 +92,21 @@ Omitted flags keep their configured values. `--output-dir` puts that run's
 separate outputs in `raw/`, `cleaned/`, `rejected/`, and `manifests/`
 subdirectories beneath the given directory.
 
+### List TCGA slide images
+
+Use `--list-tcga-slides` to query and print matching open-access TCGA slide
+image files without running the ingestion/output pipeline:
+
+```sh
+uv run --no-sync python -m src --list-tcga-slides --record-limit 20
+```
+
+The command prints one tab-separated row per result with the GDC file ID,
+filename, and associated project ID. It paginates through all matches unless
+`--record-limit` is supplied. Use `--page-size` to control records per request
+and `--offset` to begin at a particular result offset; `--offset` applies only
+to slide listing. If no matching files are found, the command prints a message.
+
 ### Output files
 
 Each successful API page is saved as its original JSON response under a unique

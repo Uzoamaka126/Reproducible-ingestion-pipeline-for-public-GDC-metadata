@@ -3,13 +3,15 @@
 import hashlib
 import json
 import logging
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
 
-from src.cli import PageFetchError, fetch_all_pages, main
+from src.cli import PageFetchError, build_list_tcga_slides, fetch_all_pages, main
 from src.config import PipelineConfig
 
 
@@ -119,6 +121,62 @@ class FetchPipelineTests(unittest.TestCase):
         self.assertEqual(requests, [(0, 2), (2, 1)])
         cleaned = next(self.config.cleaned_dir.rglob("records.jsonl"))
         self.assertEqual(len(cleaned.read_text().splitlines()), 3)
+
+    def test_lists_tcga_slides_across_pages_and_honors_record_limit(self) -> None:
+        requests: list[dict[str, object]] = []
+
+        def mocked_urlopen(request: object, timeout: int) -> FakeResponse:
+            body = json.loads(request.data)
+            requests.append(body)
+            offset = body["from"]
+            size = body["size"]
+            hits = [
+                {
+                    "file_id": f"slide-{index}",
+                    "file_name": f"slide-{index}.svs",
+                    "cases": [{"project": {"project_id": "TCGA-GBM"}}],
+                }
+                for index in range(offset, offset + size)
+            ]
+            return self.page_response(hits, total=20)
+
+        output = StringIO()
+        with patch("src.cli.urlopen", side_effect=mocked_urlopen), redirect_stdout(output):
+            count = build_list_tcga_slides(
+                self.config, self.logger, record_limit=3
+            )
+
+        self.assertEqual(count, 3)
+        self.assertEqual(
+            [(request["from"], request["size"]) for request in requests],
+            [(0, 2), (2, 1)],
+        )
+        self.assertTrue(all(request["fields"] == "file_id,file_name,data_type,data_category,cases.project.project_id" for request in requests))
+        filters = requests[0]["filters"]
+        self.assertEqual(filters["op"], "and")
+        clauses = filters["content"]
+        self.assertEqual(clauses[0]["content"]["field"], "files.access")
+        self.assertEqual(clauses[1]["content"]["content"][0]["content"]["value"], "TCGA")
+        self.assertEqual(clauses[1]["content"]["content"][1]["content"]["value"], "Slide Image")
+        self.assertEqual(
+            output.getvalue().splitlines(),
+            [
+                "slide-0\tslide-0.svs\tTCGA-GBM",
+                "slide-1\tslide-1.svs\tTCGA-GBM",
+                "slide-2\tslide-2.svs\tTCGA-GBM",
+            ],
+        )
+
+    def test_slide_listing_reports_no_results(self) -> None:
+        output = StringIO()
+        with (
+            patch("src.cli.urlopen", return_value=self.page_response([], total=0)),
+            redirect_stdout(output),
+        ):
+            count = build_list_tcga_slides(self.config, self.logger)
+
+        self.assertEqual(count, 0)
+        self.assertIn("No TCGA slide images found", output.getvalue())
 
     def test_retries_failed_page_with_growing_delay_and_stops_on_success(self) -> None:
         file_attempts = 0
