@@ -1,5 +1,7 @@
 # Reproducible ingestion pipeline for public GDC metadata
 
+Follow my journey [here](https://app.notion.com/p/uzoamakaanyanwu/Creating-a-Reproducible-ingestion-pipeline-for-public-GDC-metadata-416533eca24c809caa19d3abc05ca789?source=copy_link)
+
 ## GDC source contract
 
 - **Endpoint:** `POST https://api.gdc.cancer.gov/files` (the GDC files search
