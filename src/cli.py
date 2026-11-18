@@ -392,6 +392,39 @@ def fetch_all_pages(
     return page_count
 
 
+def build_list_tcga_slides(config: PipelineConfig, logger: logging.Logger, offset: int, record_limit: int | None = None) -> int:
+    slide_filter = {
+        "op": "=",
+        "content": [
+            {"op": "=", "content": {"field": "cases.project.program.name", "value": "TCGA"}},
+            {"op": "and", "content": {"field": "files.data_type", "value": "Slide Image"}},
+        ],
+    }
+    slide_config = replace(
+        config,
+        additional_filter=slide_filter,
+        fields=[
+            "file_id",
+            "file_name",
+            "data_type",
+            "data_category",
+            "cases.project.project_id",
+        ]
+    )
+    slide_config.page_size = min(config.page_size, record_limit)
+
+    # generating a run_id same as the ingestion pipeline
+    started_at = datetime.now(timezone.utc)
+    run_id = started_at.strftime("%Y%m%dT%H%M%S.%fZ")
+
+    return _fetch_with_retries(
+        slide_config,
+        offset,
+        logger,
+        run_id,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Fetch open-access GDC file metadata pages.")
     parser.add_argument(
@@ -413,6 +446,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the configured total attempts per request",
     )
     parser.add_argument(
+        "--list-tcga-slides",
+        action="store_true",
+        help="Queries GDC for TCGA diagnostic slide files",
+    )
+    parser.add_argument(
         "--record-limit",
         type=int,
         default=None,
@@ -432,6 +470,7 @@ def apply_cli_overrides(
     *,
     page_size: int | None = None,
     max_attempts: int | None = None,
+    list_tcga_slides: bool | None = None,
     output_dir: Path | None = None,
 ) -> PipelineConfig:
     """Return a per-run config with supplied CLI values taking precedence."""
@@ -444,6 +483,8 @@ def apply_cli_overrides(
         if max_attempts < 1:
             raise ValueError("--max-attempts must be positive")
         updates["max_attempts"] = max_attempts
+    if list_tcga_slides is True:
+        updates["list_tcga_slides"] = True
     if output_dir is not None:
         output_root = output_dir.expanduser().resolve()
         updates.update(
@@ -466,9 +507,17 @@ def main(argv: list[str] | None = None) -> int:
             page_size=args.page_size,
             max_attempts=args.max_attempts,
             output_dir=args.output_dir,
+            # list_tcga_slides=args.list_tcga_slides,
         )
         if args.record_limit is not None and args.record_limit < 1:
             raise ValueError("--record-limit must be positive")
+        if args.list_tcga_slides is True:
+            if args.offset:
+                offset = args.offset
+            else:
+                offset = 0
+            build_list_tcga_slides(config, logger, offset, record_limit=args.record_limit)
+            return 0
         fetch_all_pages(config, logger, record_limit=args.record_limit)
     except (OSError, KeyError, ValueError, PageFetchError, RuntimeError) as error:
         _log_event(logger, "run_failed", error=str(error), timestamp = datetime.now(timezone.utc).isoformat(),)
