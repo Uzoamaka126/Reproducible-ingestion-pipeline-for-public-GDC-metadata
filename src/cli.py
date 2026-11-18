@@ -156,12 +156,15 @@ def _fetch_with_retries(
     config: PipelineConfig,
     offset: int,
     logger: logging.Logger,
-    run_id: str
+    run_id: str,
+    *,
+    log_success: bool = True,
 ) -> tuple[bytes, dict[str, Any]]:
     for attempt in range(1, config.max_attempts + 1):
         try:
             body, parsed = _request_page(config, offset)
-            _log_event(logger, "page_fetched", offset=offset, attempt=attempt, timestamp = datetime.now(timezone.utc).isoformat(), run_id=run_id)
+            if log_success:
+                _log_event(logger, "page_fetched", offset=offset, attempt=attempt, timestamp = datetime.now(timezone.utc).isoformat(), run_id=run_id)
             return body, parsed
         except (HTTPError, URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError) as error:
             safe_error = _safe_error_message(error)
@@ -420,13 +423,16 @@ def build_list_tcga_slides(
     fetched = 0
     page_offset = offset
     printed_any = False
+    print("file_id\tfile_name\tproject_id")
 
     while record_limit is None or fetched < record_limit:
         page_size = slide_config.page_size
         if record_limit is not None:
             page_size = min(page_size, record_limit - fetched)
         page_config = replace(slide_config, page_size=page_size)
-        _, parsed = _fetch_with_retries(page_config, page_offset, logger, run_id)
+        _, parsed = _fetch_with_retries(
+            page_config, page_offset, logger, run_id, log_success=False
+        )
         data = parsed["data"]
         hits = data["hits"]
         total = data["pagination"]["total"]

@@ -161,6 +161,7 @@ class FetchPipelineTests(unittest.TestCase):
         self.assertEqual(
             output.getvalue().splitlines(),
             [
+                "file_id\tfile_name\tproject_id",
                 "slide-0\tslide-0.svs\tTCGA-GBM",
                 "slide-1\tslide-1.svs\tTCGA-GBM",
                 "slide-2\tslide-2.svs\tTCGA-GBM",
