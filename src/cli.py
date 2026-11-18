@@ -419,6 +419,7 @@ def build_list_tcga_slides(
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     fetched = 0
     page_offset = offset
+    printed_any = False
 
     while record_limit is None or fetched < record_limit:
         page_size = slide_config.page_size
@@ -437,11 +438,17 @@ def build_list_tcga_slides(
                 if isinstance(case, dict) and isinstance(case.get("project"), dict)
                 and case["project"].get("project_id")
             })
-            print(f"{hit.get('file_name', '(unnamed)')}\t{', '.join(projects)}")
+            print(
+                f"{hit.get('file_id', '(no file ID)')}\t"
+                f"{hit.get('file_name', '(unnamed)')}\t{', '.join(projects)}"
+            )
+            printed_any = True
         fetched += len(hits)
         page_offset += len(hits)
         if not hits or page_offset >= total:
             break
+    if not printed_any:
+        print("No TCGA slide images found for the requested offset and limit.")
     return fetched
 
 
@@ -537,9 +544,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.record_limit is not None and args.record_limit < 1:
             raise ValueError("--record-limit must be positive")
-        if args.offset < 0:
-            raise ValueError("--offset cannot be negative")
         if args.list_tcga_slides is True:
+            if args.offset < 0:
+                raise ValueError("--offset cannot be negative")
             build_list_tcga_slides(
                 config, logger, args.offset, record_limit=args.record_limit
             )
